@@ -455,6 +455,10 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
             extrusion_patch_locs = [pos + np.random.normal(loc=[0,0,0],scale=[1,5,5]) for pos in np.array(extrusion_locs)] 
             extrusion_patch_locs = np.array(extrusion_patch_locs).astype(int)
 
+            # ammend patch center such that it is contained in the image
+            extrusion_patch_locs = np.maximum(extrusion_patch_locs, np.array(patch_size)//2)
+            extrusion_patch_locs = np.minimum(extrusion_patch_locs, np.array([zres,xres,yres]) - np.array(patch_size)//2)
+
             extrusion_patches = extract_rotated_patches_aniso(new_labelled_volumes, 
                                                               extrusion_patch_locs, 
                                                               spacing=sampling, 
