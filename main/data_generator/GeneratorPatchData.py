@@ -117,24 +117,82 @@ def rotate_label_patch_aniso(patch, spacing, angle_zx, angle_zy, pad_value=0):
     return rotated
 
 
-def extract_rotated_patches_aniso(volume, centers, spacing=(1,1,1), patch_size=(16,64,64), p=0.5, angle_range=(-30,30), pad_value=0):
+def extract_rotated_patches_aniso( volume, centers, spacing=(1,1,1), patch_size=(16,64,64), p=0.5, angle_range=(-30,30), pad_value=0, interpolation_order=1):
+    """
+    Extract anisotropy-aware rotated patches.
 
+    Parameters
+    ----------
+    volume : ndarray OR list of ndarray
+        Either:
+            - single 3D array
+            - list of aligned 3D arrays
+
+        If a list is given:
+            - identical extraction + augmentation is applied to all arrays
+            - useful for image + labels + distance maps etc.
+
+    centers : list of (z,x,y)
+    spacing : (sz,sx,sy)
+    patch_size : output patch size
+    p : probability of rotation
+    angle_range : rotation range in degrees
+    pad_value : constant padding value
+    interpolation_order :
+        0 = nearest neighbour (labels)
+        1 = linear interpolation (images)
+
+    Returns
+    -------
+    patches :
+        if single volume:
+            ndarray (N, dz, dx, dy)
+        if list:
+            list of ndarrays
+            one output array per input volume
+    """
+
+    # normalize input
+    single_input = not isinstance(volume, (list, tuple))
+
+    if single_input:
+        volumes = [volume]
+    else:
+        volumes = list(volume)
+
+    # check shapes
+    shape = volumes[0].shape
+    for v in volumes:
+        assert v.shape == shape
+
+    Z, X, Y = shape
+
+    # geometry
     sz, sx, sy = spacing
+
     dz, dx, dy = patch_size
     hz, hx, hy = dz//2, dx//2, dy//2
 
-    # Margin in physical space
     phys_radius = np.sqrt((dx*sx)**2 + (dy*sy)**2) / 2
+
     margin_z = int(np.ceil(phys_radius / sz))
     margin_x = int(np.ceil(phys_radius / sx))
     margin_y = int(np.ceil(phys_radius / sy))
 
-    patches = []
-    Z, X, Y = volume.shape
+    # output containers
+    extracted = [[] for _ in volumes]
 
+    # loop centers
     for cz, cx, cy in centers:
 
-        # ---- 1. Extract larger patch ----
+        # SAME random transform for all arrays
+        do_rotate = np.random.rand() < p
+
+        if do_rotate:
+            a1 = np.random.uniform(*angle_range)
+            a2 = np.random.uniform(*angle_range)
+
+        # extract larger patch coordinates
         z0, z1 = cz - hz - margin_z, cz + hz + margin_z
         x0, x1 = cx - hx - margin_x, cx + hx + margin_x
         y0, y1 = cy - hy - margin_y, cy + hy + margin_y
@@ -143,43 +201,43 @@ def extract_rotated_patches_aniso(volume, centers, spacing=(1,1,1), patch_size=(
         x0c, x1c = max(0, x0), min(X, x1)
         y0c, y1c = max(0, y0), min(Y, y1)
 
-        patch = volume[z0c:z1c, x0c:x1c, y0c:y1c]
+        pad_width = ((z0c - z0, z1 - z1c),(x0c - x0, x1 - x1c),(y0c - y0, y1 - y1c))
 
-        pad_width = (
-            (z0c - z0, z1 - z1c),
-            (x0c - x0, x1 - x1c),
-            (y0c - y0, y1 - y1c),
-        )
+        # process each aligned volume
+        for vi, vol in enumerate(volumes):
 
-        if any(pw[0] > 0 or pw[1] > 0 for pw in pad_width):
-            patch = np.pad(patch, pad_width,
-                           mode='constant', constant_values=pad_value)
+            # extract
+            patch = vol[z0c:z1c, x0c:x1c, y0c:y1c]
 
-        # ---- 2. Resample to isotropic voxels ----
-        iso_patch = ndimage.zoom(patch, (sz/sx, 1, sy/sx), order=1)
+            # pad if needed
+            if any(pw[0] > 0 or pw[1] > 0 for pw in pad_width):
+                patch = np.pad( patch, pad_width, mode='constant', constant_values=pad_value)
 
-        # ---- 3. Rotate in isotropic space ----
-        if np.random.rand() < p:
-            a1 = np.random.uniform(*angle_range)
-            a2 = np.random.uniform(*angle_range)
-            iso_patch = rotate_label_patch_aniso(iso_patch, spacing, a1, a2)
+            # isotropic resampling
+            iso_patch = ndimage.zoom( patch, (sz/sx, 1, sy/sx), order=interpolation_order)
 
-        # ---- 4. Resample back to original spacing ----
-        patch = ndimage.zoom(iso_patch, (sx/sz, 1, sx/sy), order=1)
+            # rotation
+            if do_rotate:
+                iso_patch = rotate_label_patch_aniso( iso_patch, spacing, a1, a2, pad_value=pad_value)
 
-        # ---- 5. Crop center to final size ----
-        bz, bx, by = patch.shape
-        cz2, cx2, cy2 = bz//2, bx//2, by//2
+            # back to original spacing
+            patch = ndimage.zoom( iso_patch, (sx/sz, 1, sx/sy), order=interpolation_order)
 
-        final = patch[
-            cz2-hz:cz2+hz,
-            cx2-hx:cx2+hx,
-            cy2-hy:cy2+hy
-        ]
+            # crop center
+            bz, bx, by = patch.shape
+            cz2, cx2, cy2 = bz//2, bx//2, by//2
 
-        patches.append(final)
+            final = patch[cz2-hz:cz2+hz,cx2-hx:cx2+hx,cy2-hy:cy2+hy]
 
-    return np.stack(patches)
+            extracted[vi].append(final)
+
+    # stack outputs
+    extracted = [np.stack(p) for p in extracted]
+
+    if single_input:
+        return extracted[0]
+
+    return extracted
 
 ''' PARAMETERS '''
 
@@ -214,6 +272,9 @@ w_z = 1 # width of layer sample space. Increase reduces uniformity, but reduces 
 rosette_size_parameter = 0.7 # the mean radii of rosette cells must exceed this proportion of all synthetic cell radii
 extrusion_p = 0.7 # extrusions size as a fraction of mean cell radii (MUST BE >= 0.7)
 rotation_p = 0.2 # percentage of patches rotated between -30 and 30 degrees.
+
+scale_peak = 1.75
+scale_sigma = 1.5
 
 assert extrusion_p >= 0.7
 
@@ -381,7 +442,7 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
     else:
     
         extrusion_locs = np.array(extrusion_locs).astype(int)
-
+        
         '''
         STEP 4
         '''
@@ -415,8 +476,9 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
             STEP 6
 
             6.1: Get the same number of control samples as extrusions
-            6.2: Extract patches
-            6.3  Generate textured images
+            6.2: Scale the membrane intensities of extrudint cells
+            6.3: Extract patches + scale intensities
+            6.4  Generate textured images
             '''
 
             # get the same control samples
@@ -446,24 +508,38 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
             
             ctrl_patch_locs = np.array(ctrl_patch_locs).astype(int)
 
-
             '''
             Step 6.2
             '''
 
+            extrusion_labels = [new_labelled_volumes[pos[0],pos[1],pos[2]] for pos in np.array(extrusion_locs)]
+
+            # signed distance map of extruding cell membranes
+            extrusion_membrane_distmap = np.zeros(new_labelled_volumes.shape)
+            for ex_label in extrusion_labels:
+                extrusion_membrane_distmap -= ndimage.distance_transform_edt(new_labelled_volumes==ex_label, sampling=sampling) # negative inside
+            extrusion_membrane_distmap += ndimage.distance_transform_edt(extrusion_membrane_distmap==0, sampling=sampling) # positive outside
+
+            # scalar field, >1 at membrane, 1 everywhere else.
+            scaling = 1 + (scale_peak-1)*np.exp(-0.5*(extrusion_membrane_distmap/scale_sigma)**2)
+
+            '''
+            Step 6.3
+            '''
+
             # vary loc such that extrusion not always centred
-            extrusion_patch_locs = [pos + np.random.normal(loc=[0,0,0],scale=[1,5,5]) for pos in np.array(extrusion_locs)] 
+            extrusion_patch_locs = [pos + 0*np.random.normal(loc=[0,0,0],scale=[1,5,5]) for pos in np.array(extrusion_locs)] 
             extrusion_patch_locs = np.array(extrusion_patch_locs).astype(int)
 
             # ammend patch center such that it is contained in the image
             extrusion_patch_locs = np.maximum(extrusion_patch_locs, np.array(patch_size)//2)
             extrusion_patch_locs = np.minimum(extrusion_patch_locs, np.array([zres,xres,yres]) - np.array(patch_size)//2)
 
-            extrusion_patches = extract_rotated_patches_aniso(new_labelled_volumes, 
-                                                              extrusion_patch_locs, 
-                                                              spacing=sampling, 
-                                                              patch_size=patch_size, 
-                                                              p=rotation_p)
+            extrusion_patches, extrusion_patch_scaling = extract_rotated_patches_aniso([new_labelled_volumes, scaling], 
+                                                                                       extrusion_patch_locs, 
+                                                                                       spacing=sampling, 
+                                                                                       patch_size=patch_size, 
+                                                                                       p=rotation_p)
             
             ctrl_patches = extract_rotated_patches_aniso(new_labelled_volumes, 
                                                          ctrl_patch_locs, 
@@ -472,7 +548,7 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                                          p=rotation_p)
 
             '''
-            Step 6.3
+            Step 6.4
             '''
 
             control_imgs = []
@@ -492,7 +568,7 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig)
                 control_imgs.append(synth_img)
             
-            for patch in extrusion_patches:
+            for patch, scaling in zip(extrusion_patches, extrusion_patch_scaling):
                 sampler_file = np.random.choice(sampler_files)
                 with open(sampler_file, 'rb') as f:
                     sampler = pickle.load(f)
@@ -504,7 +580,7 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          sampling=sampling,
                                          distmap_blur=distmap_blur, distmap_sig=distmap_sig, 
                                          gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig)
-                extrusion_imgs.append(synth_img)
+                extrusion_imgs.append(synth_img * scaling)
         
             '''
             STEP 7
