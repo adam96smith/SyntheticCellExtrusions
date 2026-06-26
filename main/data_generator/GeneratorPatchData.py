@@ -322,6 +322,8 @@ rosette_size_parameter = 0.7 # the mean radii of rosette cells must exceed this 
 extrusion_p = 0.7 # extrusions size as a fraction of mean cell radii (MUST BE >= 0.7)
 rotation_p = 0.2 # percentage of patches rotated between -30 and 30 degrees.
 
+edge_prob = .5 # if you sample from a patch with background, add background to your patch with probability
+
 scale_peak = 1.75
 scale_sigma = 1.5
 
@@ -624,7 +626,9 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          dist_map=None, 
                                          sampling=sampling, 
                                          distmap_blur=distmap_blur, distmap_sig=distmap_sig, 
-                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig)
+                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig,
+                                         jitter_sigma=0,
+                                         bg_partition=False)
                 control_imgs.append(synth_img)
             
             for patch, scaling in zip(extrusion_patches, extrusion_patch_scaling):
@@ -648,7 +652,9 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          dist_map=None, 
                                          sampling=sampling,
                                          distmap_blur=distmap_blur, distmap_sig=distmap_sig, 
-                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig)
+                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig,
+                                         jitter_sigma=0,
+                                         bg_partition=False)
                 extrusion_imgs.append(synth_img * scaling)
         
             '''
