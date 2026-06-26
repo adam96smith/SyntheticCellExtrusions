@@ -121,6 +121,8 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
                                       save_path=save_path,
                                       skip=skip,
                                       disable_labels=disable_labels,
+                                      jitter_sigma=0,
+                                      bg_partition=False # keep the background region as one region
                                       )
 
         
@@ -161,6 +163,7 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
                                       save_path=save_path,
                                       skip=skip,
                                       disable_labels=disable_labels,
+                                      bg_partition=False # keep the background region as one region
                                      )
         
 

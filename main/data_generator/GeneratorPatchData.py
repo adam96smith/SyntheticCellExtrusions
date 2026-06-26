@@ -239,6 +239,55 @@ def extract_rotated_patches_aniso( volume, centers, spacing=(1,1,1), patch_size=
 
     return extracted
 
+
+def custom_mask(patch_size, r0, r1, z_spacing=2):
+
+    '''
+    Generates a masked region using a plane defined by a vector 
+    from the centre of patch_size.
+
+    patch_size: size of target array
+    r0,r1: range to sample vector siztance (as radius from cetre point)
+    z_spacing: anisotropy of target array (default 2)
+    
+    '''
+    
+    nx,ny,nz = patch_size
+    
+    output = np.zeros(patch_size)
+    
+    r = np.random.uniform(r0, r1)
+    theta = np.random.uniform(0, np.pi)
+    phi = np.random.uniform(0, 2*np.pi)
+    
+    v = np.array([
+        r/z_spacing * np.cos(theta),
+        r * np.sin(theta) * np.cos(phi),
+        r * np.sin(theta) * np.sin(phi),
+    ])
+    
+    distance = np.linalg.norm(v)
+    n = v / distance           # unit normal
+    
+    center = np.array([(nx-1)/2, (ny-1)/2, (nz-1)/2])
+    
+    plane_point = center + v   # point on the plane
+    
+    x, y, z = np.indices((nx, ny, nz))
+    
+    signed = (
+        (x - plane_point[0]) * n[0] +
+        (y - plane_point[1]) * n[1] +
+        (z - plane_point[2]) * n[2]
+    )
+    
+    mask = signed * np.dot(center - plane_point, n) < 0
+    
+    output[mask] = 1
+
+    return output
+    
+
 ''' PARAMETERS '''
 
 # load configs
@@ -558,6 +607,16 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                 sampler_file = np.random.choice(sampler_files)
                 with open(sampler_file, 'rb') as f:
                     sampler = pickle.load(f)
+
+                if '0' in sampler.keys():
+                    if np.random.rand() < edge_prob:
+                        
+                        # generate edge mask with random plane
+                        edge_mask = custom_mask(patch_size, 16, 24, z_spacing=4)
+                        
+                        # set values to 0 = background
+                        patch[edge_mask] = 0
+                    
                 
                 synth_img = texture_mask(patch>0, sampler, 
                                          labelled_mask=patch, 
@@ -572,6 +631,16 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                 sampler_file = np.random.choice(sampler_files)
                 with open(sampler_file, 'rb') as f:
                     sampler = pickle.load(f)
+
+                if '0' in sampler.keys():
+                    if np.random.rand() < edge_prob:
+                        
+                        # generate edge mask with random plane
+                        edge_mask = custom_mask(patch_size, 16, 24, z_spacing=4)
+                        
+                        # set values to 0 = background
+                        patch[edge_mask] = 0
+                    
                 
                 synth_img = texture_mask(patch>0, sampler, 
                                          labelled_mask=patch, 
