@@ -1,56 +1,68 @@
-''' ## NEEDS UPDATING 
-Functions to Generate Synthetic Fluorescent Distributions based on real (labelled) data.
+'''
+Author: Adam Smith 
 
-*** Part 1: fluorescent sampler ***
+Updated version for creating sample-based cell images from labelled data.
 
-Input: image, segmentation (, dist_map, aniso_factor, save_path)
-Output: dictionary of organised fluorescent values based on input data.
-Parameters:
-    dx: distance bin size (default 2)
-    max_dist: maximum distance to sample (default 50)
-
-Summary: Organises fluorescent values based on the distance to the segmentation boundary (eg. cell membrane). The fluorescent values are placed in bins based on their distance which can be converted to CDFs for texturing new cells (in Part 2)
-
-*** Part 2: texture function ***
-
-Input: binary mask, input dictionary (from Part 1) (, dist_map, aniso_factor)
-Output: synthetic image
-Parameters:
-    focal_on: bool, (if true, high intensities congregate at focal points at surface)
-        min_foci, max_foci: int, number of foci on surface
-        min_r, max_r: float, defines size of foci
-    distmap_blur: bool, (default True, blurs the distance map to provent the sampler developing blocky distributions)
-        distmap_sig: float, (default .1, std of noise added to cause blurring)
-    gaussian_blur: bool, (default True, blurs the output image)
-        gaussian_sig: float, (default .5, std of blurring)
-    resample_fraction: float, (default=.25, fraction of pixels to resample to match texture)
+Supports multi-cell images and alternative background sampling.
 
 '''
 
-# imports
 import numpy as np
-from scipy.ndimage import distance_transform_edt, gaussian_filter
-from skimage.measure import label
+import matplotlib.pyplot as plt
+from scipy.ndimage import distance_transform_edt
 import pickle
+from collections import defaultdict
 
+# Functions
 
-def custom_resample(values, num_samples=1000, bins = 100):
+def convert_sampler(sampler):
+
     '''
-    Input array of values gets converted to a CDF, and 'num_samples' are drawn
-    '''
-    # Step 1: Calculate histogram-based probability distribution
-    hist, bin_edges = np.histogram(values, bins=bins, density=True)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Midpoints of bins
-    pdf = hist / np.sum(hist)  # Normalize to get probability density
-    cdf = np.cumsum(pdf)  # Cumulative distribution
+    Original sampler splits data by Voronoi patterns
 
-    # Step 2: Sample uniformly and map to bin centers
-    random_samples = np.random.rand(num_samples)
-    sampled_indices = np.searchsorted(cdf, random_samples)
-    resampled_values = bin_centers[sampled_indices]  # Map to bin centers
+    This function converts the original by mergin all 
+    background data into an independent region 
+    '''
+
+    new_sampler = {"all": sampler["all"]}
+    
+    positive = defaultdict(lambda: {"x0": [], "x1": [], "y": []})
+    
+    for sampler_id, bins in sampler.items():
+        if sampler_id == "all":
+            continue
+    
+        # Keep only negative bins
+        new_sampler[sampler_id] = {}
+    
+        for bin_id, entry in bins.items():
+            if int(bin_id) < 0:
+                new_sampler[sampler_id][bin_id] = entry
+            else:
+                positive[bin_id]["x0"].append(entry["x0"])
+                positive[bin_id]["x1"].append(entry["x1"])
+                positive[bin_id]["y"].append(entry["y"])
+    
+    # Build the new "0" entry
+    new_sampler["0"] = {}
+    
+    for bin_id, entry in positive.items():
+        new_sampler["0"][bin_id] = {
+            "x0": min(entry["x0"]),
+            "x1": min(entry["x1"]),
+            "y": np.concatenate(entry["y"]),
+        }
+        
+    return new_sampler
+
+
+def custom_resample(values, num_samples=1000):
+    '''
+    Placeholder for more sophisticated sampling - default is random choice sampling
+    '''
+    resampled_values = np.random.choice(values, replace=True, size=num_samples)
     
     return resampled_values
-
 
 def jitter_partition_map(partitions, labels, sigma):
     """
@@ -113,162 +125,129 @@ def jitter_partition_map(partitions, labels, sigma):
     
     return jittered
 
-#### Fluorescent Sampler
 
+# Sampler 
 def fluorescent_sampler(image, 
-                        mask, 
-                        labelled_mask=None, 
-                        dist_map=None, 
-                        partitions=None, 
-                        sampling=(1.0,1.0,1.0), 
+                        instances,
+                        sampling=(1.0,1.0,1.0),
                         dx=2,
-                        min_dist=-50, 
-                        max_dist=50, 
-                        one_bin_outer=False, 
+                        min_dist=-50,
+                        max_dist=50,
                         save_path=None,
-                        skip=5,
+                        subsample=5,
                         disable_labels=False,
-                        bg_partition=True,
                        ):
 
-    # check inputs are ok, and generate dist_map if required
-    assert image.shape == mask.shape
-    assert mask.dtype == bool
-    # assert min_dist % dx == 0
-    min_bins = 5
+    '''
+    Fluorescent Sampler for generating sample-based synthetic cell images.
 
-    if labelled_mask is None: # create labelled mask if not provided
-        labelled_mask = label(mask)
+    Converts labelled images/volumes into 'sampler' for image generator. 2D and 3D input supported!
+
+    image: array source of intensities used to sample.
+    instances: bool or int array of image labels.
+    sampling: pixel/voxel size used to calculate distance maps.
+    dx: value interval width for sampling.
+    min_dist, max_dist: values that define the range of sampling.
+    subsample: int, rate to subsample intensity values in defined intervals.
+    save_path: Optional, path to save sampler.
+
+    Note: The range [min_dist, max_dist] with interval width 'dx' must include 0.
+    
+    '''
+
+    # inputs conditions
+    assert image.shape == instances.shape 
+    
+    assert (np.issubdtype(instances.dtype, np.bool_) or 
+            np.issubdtype(instances.dtype, np.integer))
+
+    # interval conditions
+    assert min_dist <= 0
+    assert max_dist >= 0
+    
+    assert 0 in np.arange(min_dist, max_dist+1e-5, dx) 
+
+    # bin parameters
+    min_bins = 5 # minimum number of intervals per instance
+    min_bin_size = 10 # min values in a single bin
+    
+    # bool instances are supported, but need to convert int
+    if disable_labels:
+        ''' 
+        Remove instance labelling. Pools the intensity values from all cells into one label
+
+        The is suitable when:
+            1. The images have a lot of labelled cells
+            2. Intensity variation across cells is very low
+        '''
+        instances = (instances>.0).astype(int)
+    else:
+        instances = instances.astype(int)
+    
+    # Calculate distance map and image partition
+    dist_map, indices = distance_transform_edt(instances==0, sampling=sampling, return_indices=True)
+    for j in range(instances.max()):
+        dist_map -= distance_transform_edt(instances==j+1, sampling=sampling)
         
-    # if dist_map is None or partitions is None: # calculate distance map and image partition if not provided
-    #     dist_map, indices = distance_transform_edt(mask==0, sampling=sampling, return_indices=True)
-    #     dist_map -= distance_transform_edt(mask, sampling=sampling)
-
-    #     partitions = labelled_mask[tuple(indices)]
-
-    if partitions is None or dist_map is None: # calculate distance map and image partition if not provided
-        # Calculate the new full distance map
-        dist_map, indices = distance_transform_edt(labelled_mask==0, 
-                                                   sampling=sampling, 
-                                                   return_indices=True
-                                                  )
-        for j in range(labelled_mask.max()):
-            dist_map -= distance_transform_edt(labelled_mask==j+1, 
-                                               sampling=sampling
-                                              )
-        if bg_partition:
-            partitions = labelled_mask[tuple(indices)]
-        else:
-            partitions = labelled_mask
-
-    assert dist_map.shape == image.shape
+    partitions = instances[tuple(indices)]
     
     ## bin the values by distance
-    x = dist_map.flatten()[::skip]
-    y = image.flatten()[::skip]
-    part_flat = partitions.flatten()[::skip]
+    x = dist_map.flatten()[::subsample]
+    y = image.flatten()[::subsample]
+    part_flat = partitions.flatten()[::subsample]
     
     y = y[(min_dist < x)&(x < max_dist)]
     part_flat = part_flat[(min_dist < x)&(x < max_dist)]
     x = x[(min_dist < x)&(x < max_dist)]
 
-    if one_bin_outer:
-        bins = np.concatenate( (np.arange(min_dist, 0, dx), np.arange(0, max_dist+1e-5, max_dist)))
-    else:
-        bins = np.concatenate( (np.arange(min_dist, 0, dx), np.arange(0, max_dist+1e-5, dx)))
+    # define intervals and the corresponding labels
+    intervals = np.arange(min_dist, max_dist+1e-5, dx)
     
+    l = 0; interval_lab = []
+    for x0, x1 in zip(intervals[:-1], intervals[1:]):
+        l+=1
+        if x0 == 0:
+            v = 1*l; l+=1
+        interval_lab.append(l)
+    interval_lab = np.array(interval_lab) - v
+
+    # compute output
     output = {'all':{'x':x,'y':y}}
     lab_counter = 1
-
-    # if disable_labels:
-    #     bin_data = {}
-    #     c = 0
-
-    #     # Continuity required over the bins. 
-    #     # The bins start when sufficient data, and end at the first 
-    #     # point there is insufficient data (or max_dist is reached)
-    #     add_bin = False
-        
-    #     for x0, x1 in zip(bins[:-1], bins[1:]):
-    #         # initialise dictionary entry
-    #         tmp = y[(x0<x)&(x<=x1)]
-
-    #         # print(x0, x1, len(tmp))
-            
-    #         if len(tmp) > 10: # sufficient variability in bin
-    #             if c == 0:
-    #                 bin_data[str(c)] = {'x0':-1000, 'x1':x1, 'y':tmp}
-    #                 add_bin = True # initialise 
-    #                 c += 1
-                
-    #             else:  
-    #                 if add_bin == True:
-    #                     if x1 == max_dist:
-    #                         bin_data[str(c)] = {'x0':x0, 'x1':1000, 'y':tmp}
-    #                     else:
-    #                         bin_data[str(c)] = {'x0':x0, 'x1':x1, 'y':tmp}
-    #                     c += 1
-    #         else:
-    #             # print(f'Insufficient data in ({x0},{x1}) bin')
-    #             add_bin = False
-
-    #     print(f'Total, Counter: {c}.')
-
-    #     if c > 3: # at least 3 regions can be sampled
-    #         # set last bin  
-    #         bin_data[str(c-1)]['x1'] = 1000
-    
-    #         # Criteria for cell inclusion in sampler
-    #         if bin_data[str(c-1)]['x0'] >= 0: # if the bin criteria reaches edge the cell (consider packed cell case)
-    #             output[str(lab_counter)] = bin_data
-    #             lab_counter += 1
-    #     else:
-    #         print(f'Image not included in sampler')
-
-    # else:    
-    
-    l0 = 1 if bg_partition else 0
-    for lab in range(l0,labelled_mask.max()+1):
-        # print(f'- Label = {lab} (skip={skip})')
-        all_bin_data = {}
+    for lab in range(1,instances.max()+1):
+        binned_data = {}
         initialised = False
         ended = False
-        c = 0
-
-        for x0, x1 in zip(bins[:-1], bins[1:]):
-            c += 1
-            all_bin_data[str(c)] = {'x0':x0, 'x1':x1, 'y': y[(x0<x)&(x<=x1)&(part_flat==lab)]}
-
-        # Trim and check for continuity
-        # Trim
-        bin_data = {}
-        c = 0
-        for s in all_bin_data:
-            if len(all_bin_data[s]['y']) > 10:
-                c += 1
-                bin_data[str(c)] = all_bin_data[s]
         
-        # Continuity
-        continuous = True
-        for c0, c1 in zip(np.arange(1,c), np.arange(2,c+1)):
-            if bin_data[str(c0)]['x1'] != bin_data[str(c1)]['x0']:
-                continuous = False
+        for l, x0, x1 in zip(interval_lab, intervals[:-1], intervals[1:]):
+            if len(y[(x0<x)&(x<=x1)&(part_flat==lab)]) > min_bin_size: # Trim
+                binned_data[str(l)] = {'x0':x0, 'x1':x1, 'y': y[(x0<x)&(x<=x1)&(part_flat==lab)]}
 
-        # print('-',lab,'-')
-        # for s in bin_data:
-        #     print(bin_data[s]['x0'], bin_data[s]['x1'], len(bin_data[s]['y']))
+        successful_bins = [s for s in binned_data]
+        
+        # Check continuity
+        continuous = True
+        for b0, b1 in zip(successful_bins[:-1], successful_bins[1:]):
+            if binned_data[b0]['x1'] != binned_data[b1]['x0']:
+                continuous = False
 
         if not continuous:
             print(f'Label {lab} not continuous.')
 
-        if c < min_bins:
+        if len(successful_bins) < min_bins:
             print(f'Label {lab} too small.')
 
-        if continuous and c >= min_bins:
-            bin_data['1']['x0'] = -1000
-            bin_data[str(c)]['x1'] = 1000
+        if continuous and len(successful_bins) >= min_bins:
             
-            output[str(lab)] = bin_data
+            # only add the extended internal boundaries if at least one internal bin exists
+            if int(successful_bins[0]) < 0:
+                binned_data[successful_bins[0]]['x0'] = -1000
+                
+            # only add the extended external boundaries if at least one external bin exists
+            if int(successful_bins[-1]) > 0:
+                binned_data[successful_bins[-1]]['x1'] = 1000
+            
+            output[str(lab)] = binned_data
                             
     
     if save_path:
@@ -278,87 +257,104 @@ def fluorescent_sampler(image,
     return output
 
 
-### Texture Function
-
-def texture_mask(mask, 
+# Image Generator
+def texture_mask(instances, 
                  sampler, 
-                 labelled_mask=None, 
-                 partitions=None, 
-                 dist_map=None, 
                  sampling=(1.0,1.0,1.0), 
-                 focal_on=False, 
-                 distmap_blur=True, 
-                 distmap_sig=.1, 
-                 gaussian_blur=True, 
-                 gaussian_sig=.5, 
-                 resample_fraction=.25,
-                 jitter_sigma=5,
-                 bg_partition=True,
-                ):
+                 dist_map=None, 
+                 dm_noise=None, 
+                 vm_noise=None,
+                 fix_instances=False):
 
-    assert mask.dtype == bool
+    '''
+    Generate Sample-based cell images with texture_mask
+
+    Takes sampler obj. from fluorescent_sampler and generates textured image with instances provided.
+
+    instances: bool or int array of image labels used to guide sampling.
+    sampler: obj. saved from fluorescent_sampler
+    sampling: pixel/voxel size used to calculate distance maps. Can be different to source img.
+    dist_map: float array, signed distance map of instances (negative inside).
+    dm_noise: float, standard deviation of additive gaussian noise for distance map. Reduces block-y 
+              appearance. If None, no noise added.
+    vm_noise: float, standard deviation of additive gaussian noise for voronoi map. Reduces block-y 
+              appearance between cells. If None, no noise added.
     
-    if labelled_mask is None: # create labelled mask if not provided
-        labelled_mask = label(mask)
+    '''
+
+    # check inputs
+    assert (np.issubdtype(instances.dtype, np.bool_) or 
+            np.issubdtype(instances.dtype, np.integer))
+    if dist_map is not None:
+        assert dist_map.shape == instances.shape        
+    if dm_noise is not None:
+        assert dm_noise >= 0
+    if vm_noise is not None:
+        assert vm_noise >= 0
+    
+    if dist_map is None: # calculate distance map and voronoi partition if not provided
+        # Calculate the distance map
+        dist_map, indices = distance_transform_edt(instances==0, sampling=sampling, return_indices=True)
+        for j in range(instances.max()):
+            dist_map -= distance_transform_edt(instances==j+1, sampling=sampling)
+        voronoi = instances[tuple(indices)]
         
-    if partitions is None or dist_map is None: # calculate distance map and image partition if not provided
-        # Calculate the new full distance map
-        dist_map, indices = distance_transform_edt(labelled_mask==0, 
-                                                   sampling=sampling, 
-                                                   return_indices=True
-                                                  )
-        for j in range(labelled_mask.max()):
-            dist_map -= distance_transform_edt(labelled_mask==j+1, 
-                                               sampling=sampling
-                                              )
-
-        if bg_partition:
-            partitions = labelled_mask[tuple(indices)]
-        else:
-            partitions = labelled_mask # keeps background as 0
-
-    if partitions.max() > 1 and jitter_sigma > 0:
-        partitions = jitter_partition_map(partitions, labelled_mask, jitter_sigma)
-    
-    all_cell_labels = [int(k) for k in sampler if k not in ['all','0']]
-    labelled_mask_updated = np.zeros_like(labelled_mask)
-    partitions_updated = np.zeros_like(partitions)
-    new_labels = []
-    for lab in np.unique(partitions)[1:]:
-        sampled_lab = np.random.choice(all_cell_labels)        
-        labelled_mask_updated[labelled_mask==lab] = sampled_lab # change label
-        partitions_updated[partitions==lab] = sampled_lab # change label        
-        new_labels.append(sampled_lab)
+    else: # just get the indices for voronoi partition
+        _, indices = distance_transform_edt(instances==0, sampling=sampling, return_indices=True)
+        
+    if vm_noise is not None: # use voronoi partition
+        voronoi = instances[tuple(indices)]
+    else: # treat background separate
+        voronoi = instances
+        
+    if voronoi.max() > 1:
+        if vm_noise is not None: # add noise to voronoi pattern
+            voronoi = jitter_partition_map(voronoi, instances, vm_noise)
+        else: # merge background
+            sampler = convert_sampler(sampler)
+            
+    # update instance labels to match labels in sampler
+    if fix_instances:
+        instances_updated = instances
+        voronoi_updated = voronoi
+        new_labels = np.unique(instances)[1:]
+    else:
+        all_cell_labels = [int(k) for k in sampler if k not in ['all','0']]
+        instances_updated = np.zeros_like(instances)
+        voronoi_updated = np.zeros_like(voronoi)
+        new_labels = []
+        for lab in range(1,voronoi.max()+1):
+            sampled_lab = np.random.choice(all_cell_labels)        
+            instances_updated[instances==lab] = sampled_lab # change label
+            voronoi_updated[voronoi==lab] = sampled_lab # change label        
+            new_labels.append(sampled_lab)
     
     # Image Array
     output_image = np.zeros_like(dist_map)
 
-    if distmap_blur: ## blur but keep positive and negative separate
-        dist_map += np.random.normal(loc=0, scale=distmap_sig, size=dist_map.shape) 
+    if dm_noise is not None: ## blur but keep positive and negative separate
+        dist_map += np.random.normal(loc=0, scale=dm_noise, size=dist_map.shape) 
 
-    label_regions = [int(lab) for lab in sampler if lab not in ['all']] # list of available regions in sampler
+    # label_regions = [int(lab) for lab in sampler if lab!='all'] # list of available regions in sampler
     
-    for lab in label_regions: # if a label matches on the synthetic image, sample values
+    for lab in np.unique(voronoi_updated): # if a label matches on the synthetic image, sample values
         
         for s in sampler[str(lab)]:
             
             lb = sampler[str(lab)][s]['x0']; ub = sampler[str(lab)][s]['x1']
             
-            voxels = (lb<dist_map)&(dist_map<=ub)&(partitions_updated==lab) # pixels within the boundary
+            voxels = (lb<dist_map)&(dist_map<=ub)&(voronoi_updated==lab) # pixels within the boundary
             
             if len(voxels) > 0:
                 N = np.sum(voxels)
 
                 # sample fluorescence from real images
-                sampled_vals = custom_resample(sampler[str(lab)][s]['y'], num_samples=N, bins=100)
+                sampled_vals = custom_resample(sampler[str(lab)][s]['y'], num_samples=N)
             
                 # Get the 3D coordinates of the voxels
                 voxel_coords = np.where(voxels)
             
                 # Assign resampled values directly
                 output_image[voxel_coords] = sampled_vals
-
-    if gaussian_blur:
-        output_image = gaussian_filter(output_image, sigma=gaussian_sig)
         
     return output_image

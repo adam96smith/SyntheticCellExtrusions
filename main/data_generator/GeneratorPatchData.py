@@ -620,15 +620,11 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                         patch[edge_mask] = 0
                     
                 
-                synth_img = texture_mask(patch>0, sampler, 
-                                         labelled_mask=patch, 
-                                         partitions=None, 
-                                         dist_map=None, 
+                synth_img = texture_mask(patch, 
+                                         sampler, 
                                          sampling=sampling, 
-                                         distmap_blur=distmap_blur, distmap_sig=distmap_sig, 
-                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig,
-                                         jitter_sigma=0,
-                                         bg_partition=False)
+                                         dm_noise=distmap_sig, 
+                                         vm_noise=None)
                 control_imgs.append(synth_img)
             
             for patch, scaling in zip(extrusion_patches, extrusion_patch_scaling):
@@ -646,15 +642,11 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                         patch[edge_mask] = 0
                     
                 
-                synth_img = texture_mask(patch>0, sampler, 
-                                         labelled_mask=patch, 
-                                         partitions=None, 
-                                         dist_map=None, 
-                                         sampling=sampling,
-                                         distmap_blur=distmap_blur, distmap_sig=distmap_sig, 
-                                         gaussian_blur=gaussian_blur, gaussian_sig=gaussian_sig,
-                                         jitter_sigma=0,
-                                         bg_partition=False)
+                synth_img = texture_mask(patch, 
+                                         sampler, 
+                                         sampling=sampling, 
+                                         dm_noise=distmap_sig, 
+                                         vm_noise=None)
                 extrusion_imgs.append(synth_img * scaling)
         
             '''

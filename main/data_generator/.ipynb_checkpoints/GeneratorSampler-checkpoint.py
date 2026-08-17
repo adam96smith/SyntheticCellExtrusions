@@ -94,17 +94,12 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
         # load data
         image = imread(f'{data_path}{cell}/t{t_lab}.tif')
         try:
-            mask = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg{t_lab}.tif') # integer array for multiple cells
+            instances = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg{t_lab}.tif') # integer array for multiple cells
         except:
-            mask = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg_{t_lab}.tif') # integer array for multiple cells
+            instances = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg_{t_lab}.tif') # integer array for multiple cells
 
         if normalise:
             image = (image-image.mean())/image.std()
-
-        # # ensure labelling 0, 1, 2 .. with no gaps!
-        # labelled_mask = np.zeros_like(mask)
-        # for i, lab in enumerate(np.unique(mask)):
-        #     labelled_mask[mask==lab] = i
 
         # sampler file name
         save_path = f'data_generator/sampled_data/data_{args.dataset_id}/{cell}_t{t_lab}.pkl'
@@ -112,18 +107,13 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
 
         # sample fluorescence
         sampler = fluorescent_sampler(image, 
-                                      (labelled_mask>.5),
-                                      labelled_mask=mask,
+                                      instances,
                                       sampling=sampling,
                                       dx=dx,
                                       min_dist=min_dist,
                                       max_dist=max_dist,
                                       save_path=save_path,
-                                      skip=skip,
-                                      disable_labels=disable_labels,
-                                      jitter_sigma=0,
-                                      bg_partition=False # keep the background region as one region
-                                      )
+                                      subsample=skip)
 
         
     elif N_values == 2: ## We have slice labels:
@@ -135,17 +125,12 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
         # load data
         image = imread(f'{data_path}{cell}/t{t_lab}.tif')[zs]
         try:
-            mask = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg{t_lab}_{zs_lab}.tif') # integer array for multiple cells
+            instances = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg{t_lab}_{zs_lab}.tif') # integer array for multiple cells
         except:
-            mask = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg_{t_lab}_{zs_lab}.tif') # integer array for multiple cells
+            instances = imread(f'{data_path}{cell}_{label_type}/SEG/man_seg_{t_lab}_{zs_lab}.tif') # integer array for multiple cells
 
         if normalise:
             image = (image-image.mean())/image.std()
-
-        # # ensure labelling 0, 1, 2 .. with no gaps!
-        # labelled_mask = np.zeros_like(mask)
-        # for i, lab in enumerate(np.unique(mask)):
-        #     labelled_mask[mask==lab] = i
 
 
         # sampler file name
@@ -154,17 +139,13 @@ for n in tqdm(range(N), desc='Sampling fluorescence'):
 
         # sample fluorescence
         sampler = fluorescent_sampler(image[np.newaxis], 
-                                      (mask>.5)[np.newaxis],
-                                      labelled_mask=mask[np.newaxis],
+                                      instances[np.newaxis],
                                       sampling=sampling,
                                       dx=dx,
                                       min_dist=min_dist,
                                       max_dist=max_dist,
                                       save_path=save_path,
-                                      skip=skip,
-                                      disable_labels=disable_labels,
-                                      bg_partition=False # keep the background region as one region
-                                     )
+                                      subsample=skip)
         
 
     else: # Not a valid file format
