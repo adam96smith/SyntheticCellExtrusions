@@ -6,6 +6,7 @@ import sys
 import argparse
 import glob
 from tifffile import imread, imwrite
+import random
 
 if os.getcwd() not in sys.path:
     (sys.path).append(os.getcwd())
@@ -254,7 +255,7 @@ def custom_mask(patch_size, r0, r1, z_spacing=2):
     
     nx,ny,nz = patch_size
     
-    output = np.zeros(patch_size)
+    output = np.zeros(patch_size, bool)
     
     r = np.random.uniform(r0, r1)
     theta = np.random.uniform(0, np.pi)
@@ -320,11 +321,11 @@ w_s = 5 # Sliding window size to calculate unique integers in 2D slice
 w_z = 1 # width of layer sample space. Increase reduces uniformity, but reduces chance of extrusion (i think)
 rosette_size_parameter = 0.7 # the mean radii of rosette cells must exceed this proportion of all synthetic cell radii
 extrusion_p = 0.7 # extrusions size as a fraction of mean cell radii (MUST BE >= 0.7)
-rotation_p = 0.2 # percentage of patches rotated between -30 and 30 degrees.
+rotation_p = 0 # percentage of patches rotated between -30 and 30 degrees.
+max_shift = 5 # max z shift an extrusion center can have 
 
-edge_prob = .5 # if you sample from a patch with background, add background to your patch with probability
+edge_prob = 1 # if you sample from a patch with background, add background to your patch with probability
 
-scale_peak = 1.75
 scale_sigma = 1.5
 
 assert extrusion_p >= 0.7
@@ -572,15 +573,19 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
             extrusion_membrane_distmap += ndimage.distance_transform_edt(extrusion_membrane_distmap==0, sampling=sampling) # positive outside
 
             # scalar field, >1 at membrane, 1 everywhere else.
+            scale_peak = random.uniform(1.5, 2)
             scaling = 1 + (scale_peak-1)*np.exp(-0.5*(extrusion_membrane_distmap/scale_sigma)**2)
 
             '''
             Step 6.3
             '''
 
-            # vary loc such that extrusion not always centred
-            extrusion_patch_locs = [pos + 0*np.random.normal(loc=[0,0,0],scale=[1,5,5]) for pos in np.array(extrusion_locs)] 
-            extrusion_patch_locs = np.array(extrusion_patch_locs).astype(int)
+            # vary loc so extrusion is not always in the central z plane with 3 cell layers in the image
+            z_shifts = np.random.randint(-max_shift, max_shift + 1, size=len(extrusion_locs))
+            
+            extrusion_patch_locs = np.array(extrusion_locs).astype(int)
+            extrusion_patch_locs[:, 0] += z_shifts 
+            
 
             # ammend patch center such that it is contained in the image
             extrusion_patch_locs = np.maximum(extrusion_patch_locs, np.array(patch_size)//2)
@@ -610,14 +615,14 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                 with open(sampler_file, 'rb') as f:
                     sampler = pickle.load(f)
 
-                if '0' in sampler.keys():
-                    if np.random.rand() < edge_prob:
-                        
-                        # generate edge mask with random plane
-                        edge_mask = custom_mask(patch_size, 16, 24, z_spacing=4)
-                        
-                        # set values to 0 = background
-                        patch[edge_mask] = 0
+                # if '0' in sampler.keys():
+                if np.random.rand() < edge_prob:
+                    
+                    # generate edge mask with random plane
+                    edge_mask = custom_mask(patch_size, 16, 24, z_spacing=2)
+                    
+                    # set values to 0 = background
+                    patch[edge_mask] = 0
                     
                 
                 synth_img = texture_mask(patch, 
@@ -625,6 +630,7 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          sampling=sampling, 
                                          dm_noise=distmap_sig, 
                                          vm_noise=None)
+                synth_img = ndimage.gaussian_filter(synth_img, sigma=gaussian_sig)
                 control_imgs.append(synth_img)
             
             for patch, scaling in zip(extrusion_patches, extrusion_patch_scaling):
@@ -632,14 +638,15 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                 with open(sampler_file, 'rb') as f:
                     sampler = pickle.load(f)
 
-                if '0' in sampler.keys():
-                    if np.random.rand() < edge_prob:
-                        
-                        # generate edge mask with random plane
-                        edge_mask = custom_mask(patch_size, 16, 24, z_spacing=4)
-                        
-                        # set values to 0 = background
-                        patch[edge_mask] = 0
+                # if '0' in sampler.keys():
+                if np.random.rand() < edge_prob:
+                    
+                    # generate edge mask with random plane
+                    edge_mask = custom_mask(patch_size, 16, 24, z_spacing=2)
+
+                    
+                    # set values to 0 = background
+                    patch[edge_mask] = 0
                     
                 
                 synth_img = texture_mask(patch, 
@@ -647,8 +654,9 @@ while counter < args.N: # counter for control-extrusion pairs. N number of sampl
                                          sampling=sampling, 
                                          dm_noise=distmap_sig, 
                                          vm_noise=None)
+                synth_img = ndimage.gaussian_filter(synth_img, sigma=gaussian_sig)
                 extrusion_imgs.append(synth_img * scaling)
-        
+                
             '''
             STEP 7
             '''

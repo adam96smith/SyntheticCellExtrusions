@@ -1,8 +1,8 @@
-2026-04-30 09:37:50 | INFO | Starting synthetic data generator for 3D extrusion classifier.
-2026-04-30 09:37:50 | INFO | Samplers Loaded: 2
-2026-04-30 09:37:50 | INFO | Parameters: N_max: 8000, w_s: 5, w_z: 1, rosette_size_parameter: 0.7, extrusion_p: 0.7, rotation_p: 0.2
-2026-04-30 09:37:50 | DEBUG | Image Size (64,256,256)
-2026-04-30 09:37:50 | DEBUG | Cell Layers: 8
-2026-04-30 09:40:29 | DEBUG | Generation 1: Success, 1 Extrusions ==> (2/4)
-2026-04-30 09:42:37 | DEBUG | Generation 2: No Extrusions
-2026-04-30 09:45:40 | DEBUG | Generation 3: Success, 4 Extrusions ==> (10/4)
+2026-08-17 12:10:29 | INFO | Starting synthetic data generator for 3D extrusion classifier.
+2026-08-17 12:10:29 | INFO | Samplers Loaded: 1
+2026-08-17 12:10:29 | INFO | Parameters: N_max: 8000, w_s: 5, w_z: 1, rosette_size_parameter: 0.7, extrusion_p: 0.7, rotation_p: 0
+2026-08-17 12:10:29 | DEBUG | Image Size (64,256,256)
+2026-08-17 12:10:29 | DEBUG | Cell Layers: 8
+2026-08-17 12:12:45 | DEBUG | Generation 1: Success, 1 Extrusions ==> (2/10)
+2026-08-17 12:15:10 | DEBUG | Generation 2: Success, 1 Extrusions ==> (4/10)
+2026-08-17 12:18:29 | DEBUG | Generation 3: Success, 4 Extrusions ==> (12/10)
